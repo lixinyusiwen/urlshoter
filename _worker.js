@@ -1,4 +1,4 @@
-// Config object remains the same
+// Config object
 const config = {
   result_page: false,
   theme: "",
@@ -14,108 +14,146 @@ const config = {
 
 const protect_keylist = ["password"]
 
-let index_html = "https://crazypeace.github.io/Url-Shorten-Worker/" + config.theme + "/index.html"
-let result_html = "https://crazypeace.github.io/Url-Shorten-Worker/" + config.theme + "/result.html"
-
-const html404 = `<!DOCTYPE html>
-  <html>
-  <body>
-    <h1>404 Not Found.</h1>
-    <p>The url you visit is not found.</p>
-    <p> <a href="https://github.com/crazypeace/Url-Shorten-Worker/" target="_self">Fork me on GitHub</a> </p>
-  </body>
-  </html>`
-
-let response_header = {
-  "Content-type": "text/html;charset=UTF-8;application/json",
+// Helper functions
+async function randomString(len) {
+  len = len || 6;
+  let chars = 'ABCDEFGHJKMNPQRSTWXYZabcdefhijkmnprstwxyz2345678';
+  let maxPos = chars.length;
+  let result = '';
+  for (let i = 0; i < len; i++) {
+    result += chars.charAt(Math.floor(Math.random() * maxPos));
+  }
+  return result;
 }
 
-if (config.cors) {
-  response_header = {
-    "Content-type": "text/html;charset=UTF-8;application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST",
-    "Access-Control-Allow-Headers": "Content-Type",
+async function checkURL(URL) {
+  let str = URL;
+  let Expression = /http(s)?:\/\/([\w-]+\.)+[\w-]+(\/[\w- .\/?%&=]*)?/;
+  let objExp = new RegExp(Expression);
+  return objExp.test(str) && str[0] === 'h';
+}
+
+async function save_url(URL, LINKS) {
+  let random_key = await randomString();
+  let is_exist = await LINKS.get(random_key);
+  if (is_exist == null) {
+    await LINKS.put(random_key, URL);
+    return random_key;
+  } else {
+    return save_url(URL, LINKS);
   }
 }
 
-// Helper functions remain the same
-// ...
+function base64ToBlob(base64String) {
+  const parts = base64String.split(';base64,');
+  const contentType = parts[0].split(':')[1];
+  const raw = atob(parts[1]);
+  const rawLength = raw.length;
+  const uInt8Array = new Uint8Array(rawLength);
+  for (let i = 0; i < rawLength; ++i) {
+    uInt8Array[i] = raw.charCodeAt(i);
+  }
+  return new Blob([uInt8Array], { type: contentType });
+}
 
+// Main request handler
 export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const path = url.pathname.slice(1);
 
+  // Set up response headers
+  const response_header = {
+    "Content-type": "text/html;charset=UTF-8",
+  };
+
+  if (config.cors) {
+    response_header["Access-Control-Allow-Origin"] = "*";
+    response_header["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+    response_header["Access-Control-Allow-Headers"] = "Content-Type";
+  }
+
+  // Handle OPTIONS request for CORS
+  if (request.method === "OPTIONS") {
+    return new Response(null, { headers: response_header });
+  }
+
   // Handle API requests
   if (request.method === "POST") {
-    const req = await request.json();
-    const { cmd, url: reqUrl, key, password } = req;
+    try {
+      const req = await request.json();
+      const { cmd, url: reqUrl, key, password } = req;
 
-    if (password !== await env.LINKS.get("password")) {
-      return new Response(JSON.stringify({ status: 500, key: "", error: "Error: Invalid password." }), {
+      const storedPassword = await env.LINKS.get("password");
+      if (password !== storedPassword) {
+        return new Response(JSON.stringify({ status: 500, key: "", error: "Error: Invalid password." }), {
+          headers: response_header,
+        });
+      }
+
+      switch (cmd) {
+        case "add":
+          // Implement add logic
+          break;
+        case "del":
+          // Implement delete logic
+          break;
+        case "qry":
+          // Implement query logic
+          break;
+        case "qryall":
+          // Implement query all logic
+          break;
+        default:
+          return new Response(JSON.stringify({ status: 400, error: "Invalid command" }), {
+            headers: response_header,
+          });
+      }
+    } catch (error) {
+      return new Response(JSON.stringify({ status: 500, error: "Server error" }), {
         headers: response_header,
       });
     }
-
-    // Implement API logic here (add, del, qry, qryall)
-    // ...
-
-  } else if (request.method === "OPTIONS") {
-    return new Response("", { headers: response_header });
   }
 
-  // Handle browser requests
-  if (!path) {
-    return Response.redirect("https://zelikk.blogspot.com/search/label/Url-Shorten-Worker", 302);
+  // Handle GET requests (URL redirection)
+  if (request.method === "GET") {
+    if (!path) {
+      return Response.redirect("https://github.com/yourusername/your-repo", 302);
+    }
+
+    const value = await env.LINKS.get(path);
+
+    if (!value || protect_keylist.includes(path)) {
+      return new Response("404 Not Found", { status: 404, headers: response_header });
+    }
+
+    if (config.visit_count) {
+      let count = await env.LINKS.get(path + "-count") || "0";
+      await env.LINKS.put(path + "-count", (parseInt(count) + 1).toString());
+    }
+
+    if (config.snapchat_mode) {
+      await env.LINKS.delete(path);
+    }
+
+    let finalUrl = value;
+    if (url.search) {
+      finalUrl += url.search;
+    }
+
+    if (config.system_type === "shorturl") {
+      return Response.redirect(finalUrl, 302);
+    } else if (config.system_type === "imghost") {
+      const blob = base64ToBlob(value);
+      return new Response(blob, { headers: { "Content-Type": blob.type } });
+    } else {
+      return new Response(value, {
+        headers: { "Content-type": "text/plain;charset=UTF-8" },
+      });
+    }
   }
 
-  if (path === await env.LINKS.get("password")) {
-    const index = await fetch(index_html);
-    let indexText = await index.text();
-    indexText = indexText.replace(/__PASSWORD__/gm, await env.LINKS.get("password"));
-    return new Response(indexText, { headers: response_header });
-  }
-
-  let value = await env.LINKS.get(path);
-
-  if (protect_keylist.includes(path)) {
-    value = "";
-  }
-
-  if (!value) {
-    return new Response(html404, { headers: response_header, status: 404 });
-  }
-
-  if (config.visit_count) {
-    let count = await env.LINKS.get(path + "-count");
-    count = count ? parseInt(count) + 1 : 1;
-    await env.LINKS.put(path + "-count", count.toString());
-  }
-
-  if (config.snapchat_mode) {
-    await env.LINKS.delete(path);
-  }
-
-  if (url.search) {
-    value += url.search;
-  }
-
-  if (config.result_page) {
-    const resultPage = await fetch(result_html);
-    let resultPageText = await resultPage.text();
-    resultPageText = resultPageText.replace(/{__FINAL_LINK__}/gm, value);
-    return new Response(resultPageText, { headers: response_header });
-  }
-
-  if (config.system_type === "shorturl") {
-    return Response.redirect(value, 302);
-  } else if (config.system_type === "imghost") {
-    const blob = base64ToBlob(value);
-    return new Response(blob);
-  } else {
-    return new Response(value, {
-      headers: { "Content-type": "text/plain;charset=UTF-8;" },
-    });
-  }
+  // If we reach here, it's an unsupported request method
+  return new Response("Method Not Allowed", { status: 405, headers: response_header });
 }
