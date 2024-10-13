@@ -44,23 +44,13 @@ async function save_url(URL, LINKS) {
   }
 }
 
-function base64ToBlob(base64String) {
-  const parts = base64String.split(';base64,');
-  const contentType = parts[0].split(':')[1];
-  const raw = atob(parts[1]);
-  const rawLength = raw.length;
-  const uInt8Array = new Uint8Array(rawLength);
-  for (let i = 0; i < rawLength; ++i) {
-    uInt8Array[i] = raw.charCodeAt(i);
-  }
-  return new Blob([uInt8Array], { type: contentType });
-}
-
 // Main request handler
 export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const path = url.pathname.slice(1);
+
+  console.log(`Handling request for path: ${path}`);
 
   // Set up response headers
   const response_header = {
@@ -75,41 +65,69 @@ export async function onRequest(context) {
 
   // Handle OPTIONS request for CORS
   if (request.method === "OPTIONS") {
+    console.log("Handling OPTIONS request");
     return new Response(null, { headers: response_header });
   }
 
   // Handle API requests
   if (request.method === "POST") {
+    console.log("Handling POST request");
     try {
       const req = await request.json();
       const { cmd, url: reqUrl, key, password } = req;
 
+      console.log(`Received command: ${cmd}`);
+
       const storedPassword = await env.LINKS.get("password");
       if (password !== storedPassword) {
-        return new Response(JSON.stringify({ status: 500, key: "", error: "Error: Invalid password." }), {
+        console.log("Invalid password");
+        return new Response(JSON.stringify({ status: 403, error: "Invalid password" }), {
           headers: response_header,
         });
       }
 
       switch (cmd) {
         case "add":
-          // Implement add logic
-          break;
+          console.log("Processing add command");
+          if (!await checkURL(reqUrl)) {
+            return new Response(JSON.stringify({ status: 400, error: "Invalid URL" }), {
+              headers: response_header,
+            });
+          }
+          const shortKey = config.custom_link && key ? key : await save_url(reqUrl, env.LINKS);
+          return new Response(JSON.stringify({ status: 200, key: shortKey }), {
+            headers: response_header,
+          });
         case "del":
-          // Implement delete logic
-          break;
+          console.log("Processing delete command");
+          if (protect_keylist.includes(key)) {
+            return new Response(JSON.stringify({ status: 403, error: "Protected key" }), {
+              headers: response_header,
+            });
+          }
+          await env.LINKS.delete(key);
+          return new Response(JSON.stringify({ status: 200, message: "Deleted successfully" }), {
+            headers: response_header,
+          });
         case "qry":
-          // Implement query logic
-          break;
-        case "qryall":
-          // Implement query all logic
-          break;
+          console.log("Processing query command");
+          const value = await env.LINKS.get(key);
+          if (!value) {
+            return new Response(JSON.stringify({ status: 404, error: "Key not found" }), {
+              headers: response_header,
+            });
+          }
+          return new Response(JSON.stringify({ status: 200, url: value }), {
+            headers: response_header,
+          });
         default:
+          console.log(`Invalid command: ${cmd}`);
           return new Response(JSON.stringify({ status: 400, error: "Invalid command" }), {
             headers: response_header,
           });
       }
     } catch (error) {
+      console.error("Error processing POST request:", error);
       return new Response(JSON.stringify({ status: 500, error: "Server error" }), {
         headers: response_header,
       });
@@ -118,42 +136,39 @@ export async function onRequest(context) {
 
   // Handle GET requests (URL redirection)
   if (request.method === "GET") {
-    if (!path) {
-      return Response.redirect("https://github.com/yourusername/your-repo", 302);
-    }
+    console.log(`Handling GET request for path: ${path}`);
+    try {
+      if (!path) {
+        return new Response("Welcome to URL Shortener", { headers: response_header });
+      }
 
-    const value = await env.LINKS.get(path);
+      const value = await env.LINKS.get(path);
+      console.log(`Retrieved value for ${path}: ${value}`);
 
-    if (!value || protect_keylist.includes(path)) {
-      return new Response("404 Not Found", { status: 404, headers: response_header });
-    }
+      if (!value) {
+        console.log("Short URL not found");
+        return new Response("Short URL not found", { status: 404, headers: response_header });
+      }
 
-    if (config.visit_count) {
-      let count = await env.LINKS.get(path + "-count") || "0";
-      await env.LINKS.put(path + "-count", (parseInt(count) + 1).toString());
-    }
+      if (config.visit_count) {
+        const countKey = `${path}-count`;
+        let count = await env.LINKS.get(countKey) || "0";
+        await env.LINKS.put(countKey, (parseInt(count) + 1).toString());
+      }
 
-    if (config.snapchat_mode) {
-      await env.LINKS.delete(path);
-    }
+      if (config.snapchat_mode) {
+        await env.LINKS.delete(path);
+      }
 
-    let finalUrl = value;
-    if (url.search) {
-      finalUrl += url.search;
-    }
-
-    if (config.system_type === "shorturl") {
-      return Response.redirect(finalUrl, 302);
-    } else if (config.system_type === "imghost") {
-      const blob = base64ToBlob(value);
-      return new Response(blob, { headers: { "Content-Type": blob.type } });
-    } else {
-      return new Response(value, {
-        headers: { "Content-type": "text/plain;charset=UTF-8" },
-      });
+      console.log(`Redirecting to: ${value}`);
+      return Response.redirect(value, 302);
+    } catch (error) {
+      console.error("Error processing GET request:", error);
+      return new Response("Server error", { status: 500, headers: response_header });
     }
   }
 
   // If we reach here, it's an unsupported request method
+  console.log(`Unsupported method: ${request.method}`);
   return new Response("Method Not Allowed", { status: 405, headers: response_header });
 }
